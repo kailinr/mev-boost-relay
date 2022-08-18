@@ -51,8 +51,8 @@ func (c *ProdBeaconClient) SubscribeToHeadEvents(slotC chan uint64) {
 	}
 }
 
-func (c *ProdBeaconClient) FetchValidators() (map[types.PubkeyHex]ValidatorResponseEntry, error) {
-	vd, err := fetchAllValidators(c.beaconURI)
+func (c *ProdBeaconClient) FetchValidators(headSlot uint64) (map[types.PubkeyHex]ValidatorResponseEntry, error) {
+	vd, err := fetchAllValidators(c.beaconURI, headSlot)
 	if err != nil {
 		return nil, err
 	}
@@ -80,9 +80,8 @@ type AllValidatorsResponse struct {
 	Data []ValidatorResponseEntry
 }
 
-func fetchAllValidators(endpoint string) (*AllValidatorsResponse, error) {
-	uri := endpoint + "/eth/v1/beacon/states/head/validators?status=active,pending"
-
+func fetchAllValidators(endpoint string, headSlot uint64) (*AllValidatorsResponse, error) {
+	uri := fmt.Sprintf("%s/eth/v1/beacon/states/%d/validators?status=active,pending", endpoint, headSlot)
 	// https://ethereum.github.io/beacon-APIs/#/Beacon/getStateValidators
 	vd := new(AllValidatorsResponse)
 	err := fetchBeacon(uri, "GET", vd)
@@ -136,4 +135,8 @@ func (c *ProdBeaconClient) GetProposerDuties(epoch uint64) (*ProposerDutiesRespo
 	resp := new(ProposerDutiesResponse)
 	err := fetchBeacon(uri, "GET", resp)
 	return resp, err
+}
+
+func (c *ProdBeaconClient) GetURI() string {
+	return c.beaconURI
 }
