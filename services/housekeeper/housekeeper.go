@@ -201,9 +201,9 @@ func (hk *Housekeeper) updateKnownValidators() {
 	// Query beacon node for known validators
 	hk.log.Debug("Querying validators from beacon node... (this may take a while)")
 
-	validators := hk.fetchValidators()
-	if validators == nil {
-		hk.log.Fatal("failed to fetch validators from all beacon nodes")
+	validators, err := hk.fetchValidators()
+	if err != nil {
+		hk.log.WithError(err).Fatal("failed to fetch validators from all beacon nodes")
 		return
 	}
 
@@ -230,7 +230,7 @@ func (hk *Housekeeper) updateKnownValidators() {
 	}
 }
 
-func (hk *Housekeeper) fetchValidators() map[types.PubkeyHex]beaconclient.ValidatorResponseEntry {
+func (hk *Housekeeper) fetchValidators() (map[types.PubkeyHex]beaconclient.ValidatorResponseEntry, error) {
 	// return the first successful beacon node response
 	var result map[types.PubkeyHex]beaconclient.ValidatorResponseEntry
 	clients := hk.getBeaconClientsByLastResponse()
@@ -255,9 +255,14 @@ func (hk *Housekeeper) fetchValidators() map[types.PubkeyHex]beaconclient.Valida
 		if err := hk.redis.SetBeaconNodeIndex(i); err != nil {
 			hk.log.WithError(err).Warn("failed to set healthy beacon node index to cache")
 		}
+		break
 	}
 
-	return result
+	if result == nil {
+		return nil, ErrBeaconNodesUnavailable
+	}
+
+	return result, nil
 }
 
 func (hk *Housekeeper) updateProposerDuties(headSlot uint64) {
@@ -280,20 +285,20 @@ func (hk *Housekeeper) updateProposerDuties(headSlot uint64) {
 	log.Debug("updating proposer duties...")
 
 	// Query current epoch
-	r := hk.getProposerDuties(epoch)
-	if r == nil {
-		log.Fatal("failed to get proposer duties for all beacon nodes")
+	r, err := hk.getProposerDuties(epoch)
+	if err == nil {
+		log.WithError(err).Fatal("failed to get proposer duties for all beacon nodes")
 		return
 	}
 
 	entries := r.Data
 
 	// Query next epoch
-	r2 := hk.getProposerDuties(epoch + 1)
+	r2, err := hk.getProposerDuties(epoch + 1)
 	if r2 != nil {
 		entries = append(entries, r2.Data...)
 	} else {
-		log.Error("failed to get proposer duties for next epoch for all beacon nodes")
+		log.WithError(err).Error("failed to get proposer duties for next epoch for all beacon nodes")
 	}
 
 	// Validator registrations are queried in parallel, and this is the result struct
@@ -326,7 +331,7 @@ func (hk *Housekeeper) updateProposerDuties(headSlot uint64) {
 	}
 
 	// Save duties to Redis
-	err := hk.redis.SetProposerDuties(proposerDuties)
+	err = hk.redis.SetProposerDuties(proposerDuties)
 	if err != nil {
 		log.WithError(err).Fatal("failed to set proposer duties")
 		return
@@ -342,7 +347,7 @@ func (hk *Housekeeper) updateProposerDuties(headSlot uint64) {
 	log.WithField("numDuties", len(_duties)).Infof("proposer duties updated: %s", strings.Join(_duties, ", "))
 }
 
-func (hk *Housekeeper) getProposerDuties(epoch uint64) *beaconclient.ProposerDutiesResponse {
+func (hk *Housekeeper) getProposerDuties(epoch uint64) (*beaconclient.ProposerDutiesResponse, error) {
 	// return the first successful beacon node response
 	var result *beaconclient.ProposerDutiesResponse
 	clients := hk.getBeaconClientsByLastResponse()
@@ -357,14 +362,19 @@ func (hk *Housekeeper) getProposerDuties(epoch uint64) *beaconclient.ProposerDut
 			continue
 		}
 
-		// Received successful response. Set this index as last successful beacon node
+		// Received successful response. Set this index as last successful beacon node and break
 		result = duties
 		if err := hk.redis.SetBeaconNodeIndex(i); err != nil {
 			hk.log.WithError(err).Warn("failed to set healthy beacon node index to cache")
 		}
+		break
 	}
 
-	return result
+	if result == nil {
+		return nil, ErrBeaconNodesUnavailable
+	}
+
+	return result, nil
 }
 
 func (hk *Housekeeper) getBeaconClientsByLastResponse() []beaconclient.BeaconNodeClient {
@@ -379,7 +389,9 @@ func (hk *Housekeeper) getBeaconClientsByLastResponse() []beaconclient.BeaconNod
 		return hk.beaconClients
 	}
 
-	clients := append(hk.beaconClients[:beaconNodeIndex], hk.beaconClients[beaconNodeIndex+1:]...)
-	clients = append([]beaconclient.BeaconNodeClient{hk.beaconClients[beaconNodeIndex]}, clients...)
+	clients := make([]beaconclient.BeaconNodeClient, len(hk.beaconClients))
+	copy(clients, hk.beaconClients)
+	clients[0], clients[beaconNodeIndex] = clients[beaconNodeIndex], clients[0]
+
 	return clients
 }
